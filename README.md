@@ -105,6 +105,35 @@ docker exec -it postgres psql -U admin -d mydb
 
 ---
 
+## 🗄️ Initialiser la base de données
+
+### Dataset complet (50 000 capteurs, 1 000 000 relevés)
+
+```bash
+docker exec -i postgres psql -U admin -d mydb < init.sql
+```
+
+> Durée estimée : 2–3 minutes.
+
+### Échantillon de test (5 000 capteurs, 100 000 relevés)
+
+Le script `init.sql` est transformé à la volée par `sed` pour réduire les volumes :
+
+```bash
+sed \
+  -e 's/generate_series(1, 50000)/generate_series(1, 5000)/g' \
+  -e 's/random() \* 50000/random() * 5000/g' \
+  -e 's/generate_series(1, 1000000)/generate_series(1, 100000)/g' \
+  -e 's|\* 100\.0 / 1000000|* 100.0 / 100000|g' \
+  init.sql | docker exec -i postgres psql -U admin -d mydb
+```
+
+> Durée estimée : ~15 secondes. Les comportements d'index et la seed (`setseed(0.42)`) restent identiques.
+
+> ℹ️ Si vous avez modifié les identifiants dans `.env`, remplacez `admin` et `mydb` par vos valeurs.
+
+---
+
 ## 📂 Structure des fichiers
 
 ```
