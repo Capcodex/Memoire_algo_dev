@@ -1,5 +1,23 @@
-.env
-.csv
-./cours 
-.pdf
+# See https://docs.github.com/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
 
+# Temporary files
+/tmp
+/connect.lock
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# IDEs and editors
+.idea/
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# System files
+.DS_Store
+Thumbs.db

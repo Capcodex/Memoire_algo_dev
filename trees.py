@@ -1,3 +1,6 @@
+import math
+
+
 class Node:
     """Un nœud de l'arbre : une clé et un pointeur vers la ligne complète."""
 
@@ -371,3 +374,515 @@ class AVLTree:
 
     def size(self):
         return len(self.heap)
+
+
+# ── B-tree ───────────────────────────────────────────────────────────────────
+
+class NoeudBTree:
+    """
+    Un nœud d'un B-tree d'ordre m.
+
+    Contient :
+        - jusqu'à m-1 clés (triées), chacune associée à un id_ligne
+          pointant vers la ligne complète dans le heap
+        - jusqu'à m pointeurs enfants (liste vide si nœud feuille)
+    """
+
+    def __init__(self, est_feuille=True):
+        self.cles = []          # liste de (clé, id_ligne), triée par clé
+        self.enfants = []       # liste de NoeudBTree (vide si feuille)
+        self.est_feuille = est_feuille
+
+    @property
+    def nb_cles(self):
+        return len(self.cles)
+
+
+class BTree:
+    """
+    B-tree d'ordre m (= nombre maximal d'enfants par nœud).
+
+    Paramètre m :
+        - Pédagogique : m=4 ou m=5 (arbre petit, facile à visualiser)
+        - Production  : m=100 à 200 (un nœud = une page disque de 4–16 Ko)
+    """
+
+    def __init__(self, m=5):
+        assert m >= 3, "L'ordre m doit être >= 3."
+        self.m = m
+        self.racine = NoeudBTree(est_feuille=True)
+        self.heap = {}   # id_ligne -> ligne complète
+
+    @property
+    def _min_cles(self):
+        """Nombre minimum de clés par nœud interne (hors racine) : ceil(m/2) - 1."""
+        return math.ceil(self.m / 2) - 1
+
+    @property
+    def _max_cles(self):
+        """Nombre maximum de clés par nœud : m - 1."""
+        return self.m - 1
+
+    # ------------------------------------------------------------------
+    # Insertion — O(log_m n)
+    # ------------------------------------------------------------------
+    def insert(self, cle, ligne_complete=None):
+        """
+        Insère une clé dans le B-tree en maintenant toutes les propriétés.
+
+        Stratégie : split préventif lors de la descente ("split on the way down").
+        Si la racine est pleine, elle est divisée avant l'insertion, ce qui
+        augmente la hauteur de l'arbre de 1 — seul moment où la hauteur croît.
+        """
+        id_ligne = len(self.heap)
+        self.heap[id_ligne] = ligne_complete
+
+        if self.racine.nb_cles == self._max_cles:
+            ancienne_racine = self.racine
+            self.racine = NoeudBTree(est_feuille=False)
+            self.racine.enfants.append(ancienne_racine)
+            self._diviser_enfant(self.racine, 0)
+
+        self._inserer_non_plein(self.racine, cle, id_ligne)
+
+    def _diviser_enfant(self, parent, idx_enfant):
+        """
+        Divise l'enfant[idx_enfant] (plein) en deux nœuds, et fait monter
+        la clé médiane vers parent.
+
+        C'est l'opération fondamentale du B-tree : elle garantit que toutes
+        les feuilles restent à la même profondeur après chaque insertion.
+        """
+        mediane_idx = self._min_cles
+        enfant_plein = parent.enfants[idx_enfant]
+        enfant_droit = NoeudBTree(est_feuille=enfant_plein.est_feuille)
+
+        # La clé médiane monte vers le parent
+        cle_med, id_med = enfant_plein.cles[mediane_idx]
+        parent.cles.insert(idx_enfant, (cle_med, id_med))
+        parent.enfants.insert(idx_enfant + 1, enfant_droit)
+
+        # Les clés > médiane migrent dans l'enfant droit
+        enfant_droit.cles = enfant_plein.cles[mediane_idx + 1:]
+        enfant_plein.cles = enfant_plein.cles[:mediane_idx]
+
+        if not enfant_plein.est_feuille:
+            enfant_droit.enfants = enfant_plein.enfants[mediane_idx + 1:]
+            enfant_plein.enfants = enfant_plein.enfants[:mediane_idx + 1]
+
+    def _inserer_non_plein(self, noeud, cle, id_ligne):
+        """Insère (cle, id_ligne) dans un nœud garanti non plein."""
+        i = noeud.nb_cles - 1
+
+        if noeud.est_feuille:
+            noeud.cles.append((None, None))
+            while i >= 0 and cle < noeud.cles[i][0]:
+                noeud.cles[i + 1] = noeud.cles[i]
+                i -= 1
+            noeud.cles[i + 1] = (cle, id_ligne)
+        else:
+            while i >= 0 and cle < noeud.cles[i][0]:
+                i -= 1
+            i += 1
+            if noeud.enfants[i].nb_cles == self._max_cles:
+                self._diviser_enfant(noeud, i)
+                if cle > noeud.cles[i][0]:
+                    i += 1
+            self._inserer_non_plein(noeud.enfants[i], cle, id_ligne)
+
+    # ------------------------------------------------------------------
+    # Recherche — O(log_m n)
+    # ------------------------------------------------------------------
+    def search(self, cle):
+        """
+        Retourne id_ligne si la clé est trouvée, None sinon.
+
+        Dans un SGBD réel, chaque descente d'un niveau = un accès disque
+        (chargement d'une page physique). La recherche binaire dans le nœud
+        (entre les m-1 clés) est effectuée entièrement en RAM après ce seul
+        chargement, sans coût supplémentaire.
+        """
+        return self._search_recursive(self.racine, cle)
+
+    def _search_recursive(self, noeud, cle):
+        i = 0
+        while i < noeud.nb_cles and cle > noeud.cles[i][0]:
+            i += 1
+        if i < noeud.nb_cles and cle == noeud.cles[i][0]:
+            return noeud.cles[i][1]
+        if noeud.est_feuille:
+            return None
+        return self._search_recursive(noeud.enfants[i], cle)
+
+    def search_row(self, cle):
+        """Recherche complète : traverse l'arbre puis accède au heap."""
+        id_ligne = self.search(cle)
+        return self.heap.get(id_ligne) if id_ligne is not None else None
+
+    # ------------------------------------------------------------------
+    # Hauteur
+    # ------------------------------------------------------------------
+    def height(self):
+        """
+        Hauteur = nombre d'arêtes entre la racine et une feuille quelconque.
+        Par construction du B-tree, toutes les feuilles sont à la même
+        profondeur : la hauteur est donc uniforme et mesurable en O(1)
+        en descendant par le premier enfant.
+        """
+        h, noeud = 0, self.racine
+        while not noeud.est_feuille:
+            noeud = noeud.enfants[0]
+            h += 1
+        return h
+
+    def size(self):
+        """Nombre total de clés dans l'arbre."""
+        return len(self.heap)
+
+    # ------------------------------------------------------------------
+    # Parcours in-order
+    # ------------------------------------------------------------------
+    def inorder_traversal(self, with_rows=False):
+        """
+        Produit les clés dans l'ordre croissant, comme le BST et l'AVL.
+        Le B-tree maintient la même propriété d'ordre : clés(enfant_i) < clé_i < clés(enfant_i+1).
+        """
+        result = []
+        self._inorder_recursive(self.racine, result, with_rows)
+        return result
+
+    def _inorder_recursive(self, noeud, result, with_rows):
+        for i in range(noeud.nb_cles):
+            if not noeud.est_feuille:
+                self._inorder_recursive(noeud.enfants[i], result, with_rows)
+            cle, id_ligne = noeud.cles[i]
+            result.append((cle, self.heap.get(id_ligne)) if with_rows else cle)
+        if not noeud.est_feuille:
+            self._inorder_recursive(noeud.enfants[noeud.nb_cles], result, with_rows)
+
+    # ------------------------------------------------------------------
+    # Statistiques internes — pour la démonstration pédagogique
+    # ------------------------------------------------------------------
+    def stats(self):
+        """
+        Métriques internes utiles pour visualiser le comportement du B-tree :
+            nb_noeuds, nb_feuilles, hauteur, taux_remplissage (%)
+        """
+        nb_noeuds, nb_feuilles, total_cles = [0], [0], [0]
+
+        def parcourir(noeud):
+            nb_noeuds[0] += 1
+            total_cles[0] += noeud.nb_cles
+            if noeud.est_feuille:
+                nb_feuilles[0] += 1
+            else:
+                for enfant in noeud.enfants:
+                    parcourir(enfant)
+
+        parcourir(self.racine)
+        taux = (total_cles[0] / (nb_noeuds[0] * self._max_cles)) * 100
+        return {
+            "nb_noeuds": nb_noeuds[0],
+            "nb_feuilles": nb_feuilles[0],
+            "hauteur": self.height(),
+            "taux_remplissage": round(taux, 1),
+        }
+
+
+# ── B+tree ──────────────────────────────────────────────────────────────────
+
+class NoeudInterne:
+    """
+    Nœud interne du B+tree : clés de routage uniquement, pas de données.
+
+    Rôle unique : guider la recherche vers la bonne feuille.
+    La densité élevée (pas d'id_ligne stocké) permet de mettre plus de clés
+    dans une même page disque -> arbre moins haut qu'un B-tree.
+    """
+
+    def __init__(self):
+        self.cles = []       # clés de routage (valeurs seules, pas de pointeur)
+        self.enfants = []    # liste de NoeudInterne ou NoeudFeuille
+
+    @property
+    def nb_cles(self):
+        return len(self.cles)
+
+
+class NoeudFeuille:
+    """
+    Nœud feuille du B+tree : clés + id_ligne + chaînage avec la feuille suivante.
+
+    Toutes les données de l'arbre sont ici. Les feuilles forment une liste
+    simplement liée de gauche à droite, permettant un parcours séquentiel
+    sans remonter vers la racine.
+    """
+
+    def __init__(self):
+        self.cles = []       # liste de (clé, id_ligne), triée par clé
+        self.suivante = None # pointeur vers la feuille suivante (chaînage)
+
+    @property
+    def nb_cles(self):
+        return len(self.cles)
+
+
+class BPlusTree:
+    """
+    B+tree d'ordre m (= nombre maximal d'enfants par nœud interne).
+
+    Les feuilles peuvent contenir jusqu'à m-1 clés (même limite que les
+    nœuds internes, par souci de symétrie dans cette implémentation).
+    """
+
+    def __init__(self, m=5):
+        assert m >= 3, "L'ordre m doit être >= 3."
+        self.m = m
+        self.racine = NoeudFeuille()   # arbre vide = une seule feuille vide
+        self.heap = {}                 # id_ligne -> ligne complète
+        self._premiere_feuille = self.racine  # point d'entrée de la liste chaînée
+
+    @property
+    def _max_cles(self):
+        return self.m - 1
+
+    @property
+    def _min_cles_interne(self):
+        return math.ceil(self.m / 2) - 1
+
+    # ------------------------------------------------------------------
+    # Insertion — O(log_m n)
+    # ------------------------------------------------------------------
+    def insert(self, cle, ligne_complete=None):
+        """
+        Insère une clé dans le B+tree.
+
+        Contrairement au B-tree, la clé médiane qui monte dans un nœud
+        interne lors d'un split de feuille est COPIÉE (pas déplacée) :
+        elle reste dans la feuille pour que les feuilles couvrent la
+        totalité des données, et une copie sert de clé de routage dans le
+        parent. C'est la distinction copie/déplacement qui différencie
+        B-tree et B+tree lors des splits.
+        """
+        id_ligne = len(self.heap)
+        self.heap[id_ligne] = ligne_complete
+
+        resultat = self._inserer(self.racine, cle, id_ligne)
+
+        # Si la racine a été splitée, on crée une nouvelle racine interne
+        if resultat is not None:
+            cle_montante, noeud_droit = resultat
+            nouvelle_racine = NoeudInterne()
+            nouvelle_racine.cles = [cle_montante]
+            nouvelle_racine.enfants = [self.racine, noeud_droit]
+            self.racine = nouvelle_racine
+
+    def _inserer(self, noeud, cle, id_ligne):
+        """
+        Insère récursivement et retourne (cle_montante, noeud_droit) si un
+        split est nécessaire, None sinon.
+        """
+        if isinstance(noeud, NoeudFeuille):
+            return self._inserer_feuille(noeud, cle, id_ligne)
+        else:
+            return self._inserer_interne(noeud, cle, id_ligne)
+
+    def _inserer_feuille(self, feuille, cle, id_ligne):
+        """Insère dans une feuille et splitte si elle dépasse m-1 clés."""
+        # Insertion triée dans la feuille
+        i = 0
+        while i < feuille.nb_cles and cle > feuille.cles[i][0]:
+            i += 1
+        feuille.cles.insert(i, (cle, id_ligne))
+
+        # Split si la feuille est trop pleine
+        if feuille.nb_cles > self._max_cles:
+            return self._splitter_feuille(feuille)
+        return None
+
+    def _splitter_feuille(self, feuille):
+        """
+        Divise une feuille en deux et retourne (clé_montante, feuille_droite).
+
+        La clé montante est la PREMIÈRE clé de la feuille droite (copiée,
+        pas déplacée) : elle reste dans la feuille droite ET sert de clé
+        de routage dans le parent. C'est la règle B+tree.
+        """
+        milieu = math.ceil(feuille.nb_cles / 2)
+        feuille_droite = NoeudFeuille()
+
+        feuille_droite.cles = feuille.cles[milieu:]
+        feuille.cles = feuille.cles[:milieu]
+
+        # Chaînage : la nouvelle feuille droite s'insère dans la liste liée
+        feuille_droite.suivante = feuille.suivante
+        feuille.suivante = feuille_droite
+
+        # La première clé de la feuille droite monte vers le parent (copiée)
+        cle_montante = feuille_droite.cles[0][0]
+        return cle_montante, feuille_droite
+
+    def _inserer_interne(self, noeud, cle, id_ligne):
+        """Descend vers l'enfant approprié et gère le split remonté."""
+        i = 0
+        while i < noeud.nb_cles and cle >= noeud.cles[i]:
+            i += 1
+
+        resultat = self._inserer(noeud.enfants[i], cle, id_ligne)
+
+        if resultat is None:
+            return None
+
+        cle_montante, noeud_droit = resultat
+        noeud.cles.insert(i, cle_montante)
+        noeud.enfants.insert(i + 1, noeud_droit)
+
+        # Split du nœud interne si nécessaire
+        if noeud.nb_cles > self._max_cles:
+            return self._splitter_interne(noeud)
+        return None
+
+    def _splitter_interne(self, noeud):
+        """
+        Divise un nœud interne en deux.
+
+        Contrairement aux feuilles, la clé médiane est DÉPLACÉE vers le
+        parent (pas copiée) : les nœuds internes ne stockent que des clés
+        de routage, donc la médiane ne doit pas rester dans l'arbre.
+        """
+        milieu = self._max_cles // 2
+        cle_montante = noeud.cles[milieu]
+
+        noeud_droit = NoeudInterne()
+        noeud_droit.cles = noeud.cles[milieu + 1:]
+        noeud_droit.enfants = noeud.enfants[milieu + 1:]
+
+        noeud.cles = noeud.cles[:milieu]
+        noeud.enfants = noeud.enfants[:milieu + 1]
+
+        return cle_montante, noeud_droit
+
+    # ------------------------------------------------------------------
+    # Recherche ponctuelle — O(log_m n)
+    # ------------------------------------------------------------------
+    def search(self, cle):
+        """
+        Retourne id_ligne si la clé est trouvée, None sinon.
+        Traverse les nœuds internes (routage seul) puis inspecte la feuille.
+        """
+        feuille = self._trouver_feuille(cle)
+        for c, id_ligne in feuille.cles:
+            if c == cle:
+                return id_ligne
+        return None
+
+    def search_row(self, cle):
+        """Recherche complète : localise la feuille puis accède au heap."""
+        id_ligne = self.search(cle)
+        return self.heap.get(id_ligne) if id_ligne is not None else None
+
+    def _trouver_feuille(self, cle):
+        """Descend l'arbre jusqu'à la feuille qui devrait contenir la clé."""
+        noeud = self.racine
+        while isinstance(noeud, NoeudInterne):
+            i = 0
+            while i < noeud.nb_cles and cle >= noeud.cles[i]:
+                i += 1
+            noeud = noeud.enfants[i]
+        return noeud
+
+    # ------------------------------------------------------------------
+    # Requête de plage — O(log_m n + k) où k = nombre de résultats
+    # ------------------------------------------------------------------
+    def range_query(self, cle_debut, cle_fin, with_rows=False):
+        """
+        Retourne toutes les clés dans [cle_debut, cle_fin].
+
+        C'est l'avantage décisif du B+tree sur le B-tree :
+          1. On localise la feuille de départ via l'arbre (O(log_m n))
+          2. On parcourt la liste chaînée des feuilles jusqu'à cle_fin (O(k))
+        Aucun retour vers la racine n'est nécessaire.
+
+        Dans PostgreSQL, c'est exactement ce que fait un Bitmap Index Scan
+        ou un Index Scan sur une requête WHERE timestamp BETWEEN t1 AND t2.
+        """
+        resultats = []
+        feuille = self._trouver_feuille(cle_debut)
+
+        while feuille is not None:
+            for cle, id_ligne in feuille.cles:
+                if cle > cle_fin:
+                    return resultats
+                if cle >= cle_debut:
+                    if with_rows:
+                        resultats.append((cle, self.heap.get(id_ligne)))
+                    else:
+                        resultats.append(cle)
+            feuille = feuille.suivante
+
+        return resultats
+
+    # ------------------------------------------------------------------
+    # Parcours in-order via la liste chaînée de feuilles
+    # ------------------------------------------------------------------
+    def inorder_traversal(self, with_rows=False):
+        """
+        Parcourt la liste chaînée des feuilles de gauche à droite.
+
+        Avantage du B+tree : le parcours complet ne nécessite pas de
+        traverser l'arbre en entier, juste de suivre la chaîne des feuilles.
+        O(n) au lieu de O(n log_m n).
+        """
+        resultats = []
+        feuille = self._premiere_feuille
+        while feuille is not None:
+            for cle, id_ligne in feuille.cles:
+                if with_rows:
+                    resultats.append((cle, self.heap.get(id_ligne)))
+                else:
+                    resultats.append(cle)
+            feuille = feuille.suivante
+        return resultats
+
+    # ------------------------------------------------------------------
+    # Hauteur et taille
+    # ------------------------------------------------------------------
+    def height(self):
+        """Hauteur = niveaux de nœuds internes (les feuilles sont au niveau 0)."""
+        h, noeud = 0, self.racine
+        while isinstance(noeud, NoeudInterne):
+            noeud = noeud.enfants[0]
+            h += 1
+        return h
+
+    def size(self):
+        """Nombre total de clés (= nombre d'enregistrements indexés)."""
+        return len(self.heap)
+
+    def stats(self):
+        """Métriques internes pour la démonstration pédagogique."""
+        nb_internes, nb_feuilles = [0], [0]
+
+        def parcourir(noeud):
+            if isinstance(noeud, NoeudInterne):
+                nb_internes[0] += 1
+                for enfant in noeud.enfants:
+                    parcourir(enfant)
+            else:
+                nb_feuilles[0] += 1
+
+        parcourir(self.racine)
+
+        # Vérification du chaînage
+        nb_feuilles_chainage, f = 0, self._premiere_feuille
+        while f is not None:
+            nb_feuilles_chainage += 1
+            f = f.suivante
+
+        return {
+            "nb_noeuds_internes": nb_internes[0],
+            "nb_feuilles": nb_feuilles[0],
+            "nb_feuilles_chainage": nb_feuilles_chainage,
+            "hauteur": self.height(),
+            "chainage_ok": nb_feuilles[0] == nb_feuilles_chainage,
+        }
